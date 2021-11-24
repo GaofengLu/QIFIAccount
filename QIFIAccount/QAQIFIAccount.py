@@ -55,7 +55,9 @@ def parse_orderdirection(od):
 
 class QIFI_Account():
 
-    def __init__(self, username, password, model="SIM", broker_name="QAPaperTrading", trade_host=mongo_ip, init_cash=1000000, taskid=str(uuid.uuid4()), nodatabase=False):
+    def __init__(self, username, password, model="SIM", broker_name="QAPaperTrading", trade_host=mongo_ip,
+                 init_cash=1000000, taskid=str(uuid.uuid4()), nodatabase=False,
+                 trade_datetime=str(datetime.datetime.now())):
         """Initial
         QIFI Account是一个基于 DIFF/ QIFI/ QAAccount后的一个实盘适用的Account基类
 
@@ -89,18 +91,20 @@ class QIFI_Account():
 
         self.trade_host = trade_host
         if model == 'BACKTEST':
-            self.db = pymongo.MongoClient(trade_host).quantaxis
+            self.db = pymongo.MongoClient(trade_host).karma_backtest
+        elif model == 'MANUAL':
+            self.db = pymongo.MongoClient(trade_host).karma_manual
         else:
-            self.db = pymongo.MongoClient(trade_host).QAREALTIME
+            self.db = pymongo.MongoClient(trade_host).karma_realtime
 
         self.pub_host = ""
         self.trade_host = ""
-        self.last_updatetime = ""
+        self.last_updatetime = trade_datetime
         self.status = 200
         self._trading_day = ""
         self.init_cash = init_cash
         self.pre_balance = 0
-        self.datetime = ""
+        self.datetime = trade_datetime
         self.static_balance = 0
 
         self.deposit = 0  # 入金
@@ -138,13 +142,46 @@ class QIFI_Account():
 
     @property
     def trading_day(self):
-        if self.model == "BACKTEST":
+        if self.model in ['BACKTEST', 'MANUAL']:
             return str(self.datetime)[0:10]
         else:
             return self._trading_day
 
     def reload(self):
-        if self.model.upper() in ['REAL', 'SIM']:
+        if self.model.upper() == 'MANUAL':
+            message = self.db.history.find_one(
+                {'account_cookie': self.user_id, 'trading_day': self.trading_day})
+            if message is not None:
+                accpart = message.get('accounts')
+
+                self.money = message.get('money')
+                self.source_id = message.get('sourceid')
+
+                self.pre_balance = accpart.get('pre_balance')
+                self.deposit = accpart.get('deposit')
+                self.withdraw = accpart.get('withdraw')
+                self.withdrawQuota = accpart.get('WithdrawQuota')
+                self.close_profit = accpart.get('close_profit')
+                self.static_balance = accpart.get('static_balance')
+                self.event = message.get('event')
+                self.trades = message.get('trades')
+                self.transfers = message.get('transfers')
+                self.orders = message.get('orders')
+                self.taskid = message.get('taskid', str(uuid.uuid4()))
+
+                positions = message.get('positions')
+                for position in positions.values():
+                    p = QA_Position(
+                    ).loadfrommessage(position)
+
+                    self.positions[position.get('exchange_id')+'.'+position.get('instrument_id')] = QA_Position(
+                    ).loadfrommessage(position)
+
+                self.banks = message.get('banks')
+                self.status = message.get('status')
+                self.wsuri = message.get('wsuri')
+
+        elif self.model.upper() in ['REAL', 'SIM']:
             message = self.db.account.find_one(
                 {'account_cookie': self.user_id, 'password': self.password})
 
@@ -244,13 +281,11 @@ class QIFI_Account():
             code=x.index, amount=x.amount, price=x.price, towards=1, datetime=x.datetime))
         return res
 
-
-
     def sync(self):
         self.on_sync()
         try:
             if not self.nodatabase:
-                if self.model == "BACKTEST":
+                if self.model in ['BACKTEST', 'MANUAL']:
                     ## 数据库: quantaxis.history
                     self.db.history.update({'account_cookie': self.user_id, 'trading_day': self.trading_day}, {
                         '$set': self.message}, upsert=True)
@@ -314,7 +349,7 @@ class QIFI_Account():
 
     @property
     def dtstr(self):
-        if self.model == "BACKTEST":
+        if self.model in ['BACKTEST', 'MANUAL']:
             return self.datetime.replace('.', '_')
         else:
             return str(datetime.datetime.now()).replace('.', '_')
@@ -673,7 +708,7 @@ class QIFI_Account():
             }
             self.orders[order_id] = order
             self.log('下单成功 {}'.format(order_id))
-            if self.model != 'BACKTEST':
+            if self.model not in ['BACKTEST', 'MANUAL']:
                 self.sync()
             self.on_ordersend(order)
             return order
@@ -786,7 +821,7 @@ class QIFI_Account():
 
             self.money -= (margin - close_profit)
             self.close_profit += close_profit
-            if self.model != "BACKTEST":
+            if self.model not in ['BACKTEST', 'MANUAL']:
                 self.sync()
 
     def get_position(self, code: str = None) -> QA_Position:
@@ -828,7 +863,7 @@ class QIFI_Account():
                 else:
                     pos.last_price = price
 
-                if self.model != 'BACKTEST':
+                if self.model not in ['BACKTEST', 'MANUAL']:
                     self.sync()
             except Exception as e:
 
