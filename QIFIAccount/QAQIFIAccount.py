@@ -94,6 +94,9 @@ class QIFI_Account():
             self.db = pymongo.MongoClient(trade_host).karma_backtest
         elif model == 'MANUAL':
             self.db = pymongo.MongoClient(trade_host).karma_manual
+            self.db.history.create_index([("account_cookie", pymongo.DESCENDING),
+                                          ("trading_day", pymongo.DESCENDING)],
+                                         unique=True, name="account_cookie_trading_day")
         else:
             self.db = pymongo.MongoClient(trade_host).karma_realtime
 
@@ -150,7 +153,7 @@ class QIFI_Account():
     def reload(self):
         if self.model.upper() == 'MANUAL':
             message = self.db.history.find_one(
-                {'account_cookie': self.user_id, 'trading_day': self.trading_day})
+                {'account_cookie': self.user_id, 'trading_day': {'$lte': self.trading_day}})
             if message is not None:
                 accpart = message.get('accounts')
 
@@ -180,6 +183,15 @@ class QIFI_Account():
                 self.banks = message.get('banks')
                 self.status = message.get('status')
                 self.wsuri = message.get('wsuri')
+
+                if message.get('trading_day', '') == str(self.trading_day):
+                    # reload
+                    pass
+                else:
+                    # settle
+                    # self.settle()
+                    # 新的一天，先清空，但不需要保存到数据库，因为每次操作完都会 settle，到那时再保存到数据库
+                    self.clear_for_newday()
 
         elif self.model.upper() in ['REAL', 'SIM']:
             message = self.db.account.find_one(
@@ -304,10 +316,7 @@ class QIFI_Account():
         except:
             traceback.print_exc()
 
-    def settle(self):
-        self.log('settle')
-        self.sync()
-
+    def clear_for_newday(self):
         self.pre_balance += (self.deposit - self.withdraw + self.close_profit)
         self.static_balance = self.pre_balance
 
@@ -326,6 +335,11 @@ class QIFI_Account():
 
         for item in self.positions.values():
             item.settle()
+
+    def settle(self):
+        self.log('settle')
+        self.sync()
+        self.clear_for_newday()  # 回测的时候是不中断的，自动进入下一天，不存在每天间断操作
 
         # sell first >> second buy ==> for make sure have enough cash
         buy_order_sche = []
@@ -552,6 +566,7 @@ class QIFI_Account():
 
 
 # 惰性计算
+
 
     @property
     def available(self):
