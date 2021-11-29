@@ -22,7 +22,7 @@ class QA_Position():
 
     基础字段
 
-    code [str]  品种名称 
+    code [str]  品种名称
     volume_long_today [float] 今仓 多单持仓
     volume_long_his   [float] 昨仓 多单持仓
     volume_short_today [float] 今仓 空单持仓
@@ -72,7 +72,7 @@ class QA_Position():
                  account_cookie='quantaxis',
                  portfolio_cookie='portfolio',
                  username='quantaxis',
-                 moneypreset=100000,  # 初始分配资金
+                 moneypreset=0,  # 初始分配资金
                  frozen=None,
                  moneypresetLeft=None,
                  volume_long_today=0,
@@ -99,6 +99,7 @@ class QA_Position():
                  position_cost_short=0,
                  position_id=None,
 
+                 lastupdatetime='',
                  market_type=None,
                  exchange_id=None,
                  trades=None,
@@ -126,6 +127,7 @@ class QA_Position():
         self.portfolio_cookie = portfolio_cookie
         self.username = username
         self.time = ''
+        self.lastupdatetime = lastupdatetime
         self.position_id = str(
             uuid.uuid4()) if position_id is None else position_id
         self.moneypreset = moneypreset
@@ -344,7 +346,7 @@ class QA_Position():
             'exchange_id': self.exchange_id,  # 交易所ID
             'moneypreset': self.moneypreset,
             'moneypresetLeft': self.moneypresetLeft,
-            'lastupdatetime': str(self.time),
+            'lastupdatetime': str(self.lastupdatetime),
             # 持仓量
             'volume_long_today': int(self.volume_long_today),
             'volume_long_his': int(self.volume_long_his),
@@ -382,7 +384,7 @@ class QA_Position():
             # 历史字段
             'trades': self.trades,
             'orders': self.orders,
-            #'last_price': self.last_price
+            # 'last_price': self.last_price
         }
 
     @property
@@ -422,7 +424,7 @@ class QA_Position():
 
     def order_check(self, amount: int, price: float, towards: int, order_id: str) -> bool:
         res = False
-        print('order check', amount, price,towards)
+        print('order check', amount, price, towards)
         if towards == ORDER_DIRECTION.BUY_CLOSE:
             # print('buyclose')
             #print(self.volume_short - self.volume_short_frozen)
@@ -512,7 +514,7 @@ class QA_Position():
             print(RuntimeError('ORDER CHECK FALSE: {}'.format(self.code)))
             return False
 
-    def update_pos(self, price, amount, towards):
+    def update_pos(self, price, amount, towards, last_tradetime):
         '''支持股票/期货的更新仓位
 
         Arguments:
@@ -539,6 +541,8 @@ class QA_Position():
         temp_cost = int(amount)*float(price) * \
             float(self.market_preset.get('unit_table', 1))
         profit = 0
+        self.time = last_tradetime
+        self.lastupdatetime = last_tradetime
         if towards == ORDER_DIRECTION.BUY:
             # 股票模式/ 期货买入开仓
             marginValue = temp_cost
@@ -580,12 +584,14 @@ class QA_Position():
                     volume_long_his   -    amount       [成交扣除]
 
 
-                
+
                 """
 
                 if self.volume_long > 0:
+                    print("pos:{} vol:{} amount:{}".format(self.position_cost_long,
+                                                           self.volume_long, amount))
                     self.position_cost_long = self.position_cost_long * \
-                        (self.volume_long )/(self.volume_long+amount)
+                        (self.volume_long)/(self.volume_long+amount)
                     self.open_cost_long = self.open_cost_long * \
                         (self.volume_long)/(self.volume_long+amount)
 
@@ -598,6 +604,7 @@ class QA_Position():
                     self.moneypresetLeft += (-marginValue + profit)
                 elif self.volume_long == 0:
                     # all close out
+                    # 价格不清零，方便后续再买回的时候计算？
                     self.open_cost_long = 0
                     self.position_cost_long = 0
 
@@ -879,7 +886,8 @@ class QA_Position():
                 exchange_id=message['exchange_id'],
                 trades=message['trades'],
                 orders=message['orders'],
-                
+                lastupdatetime=message['lastupdatetime'],
+
                 # commission=message['commission'],
                 name=message['name'])
         except:
@@ -889,7 +897,7 @@ class QA_Position():
         else:
             if self.volume_long + self.volume_short > 0:
                 self.last_price = (self.open_price_long*self.volume_long + self.open_price_short *
-                                self.volume_short)/(self.volume_long + self.volume_short)
+                                   self.volume_short)/(self.volume_long + self.volume_short)
             else:
                 self.last_price = 0
 

@@ -140,8 +140,10 @@ class QIFI_Account():
         if self.pre_balance == 0 and self.balance == 0 and self.model != "REAL":
             self.log('Create new Account')
             self.create_simaccount()
-
-        self.sync()
+        # 只有在真正有交易的日子才写入trading_day，如果只是查询就只是在查询的时候
+        # 调用on_price_change计算浮动盈亏等，不做记录
+        if self.model != 'MANUAL':
+            self.sync()
 
     @property
     def trading_day(self):
@@ -174,6 +176,7 @@ class QIFI_Account():
 
                 positions = message.get('positions')
                 for position in positions.values():
+                    print(position)
                     p = QA_Position(
                     ).loadfrommessage(position)
 
@@ -184,6 +187,8 @@ class QIFI_Account():
                 self.status = message.get('status')
                 self.wsuri = message.get('wsuri')
 
+                print("reload： {} {}".format(message.get(
+                    'trading_day', ''), self.trading_day))
                 if message.get('trading_day', '') == str(self.trading_day):
                     # reload
                     pass
@@ -687,7 +692,8 @@ class QIFI_Account():
         # self.order_rule()
         return res
 
-    def send_order(self, code: str, amount: float, price: float, towards: int, order_id: str = '', datetime: str = ''):
+    def send_order(self, code: str, amount: float, price: float, towards: int,
+                   note: str = '', order_id: str = '', datetime: str = ''):
 
         if datetime:
             self.on_price_change(code, price, datetime)
@@ -702,9 +708,9 @@ class QIFI_Account():
                 "instrument_id": code,
                 "towards": int(towards),
                 "exchange_id": self.market_preset.get_exchange(code),
-                "order_time": self.dtstr,
                 "volume": int(amount),
                 "price": float(price),
+                "note": note,
                 "order_id": order_id,
                 "seqno": self.event_id,
                 "direction": direction,
@@ -785,7 +791,6 @@ class QIFI_Account():
                 order_id, {'order_id': order_id, 'money': 0, 'price': 0})
             vl = od.get('volume_left', 0)
             if trade_amount == vl:
-
                 self.money += frozen['money']
                 frozen['amount'] = 0
                 frozen['money'] = 0
@@ -820,10 +825,12 @@ class QIFI_Account():
                 "instrument_id": od['instrument_id'],
                 "order_id": order_id,
                 "exchange_trade_id": trade_id,
+                "towards": trade_towards,
                 "direction": od['direction'],
                 "offset": od['offset'],
                 "volume": trade_amount,
                 "price": trade_price,
+                "note": od['note'],
                 "trade_time": trade_time,
                 "commission": float(0),
                 "trade_date_time": self.transform_dt(trade_time)}
@@ -832,7 +839,7 @@ class QIFI_Account():
             print('update trade')
 
             margin, close_profit = self.get_position(code).update_pos(
-                trade_price, trade_amount, trade_towards)
+                trade_price, trade_amount, trade_towards, trade_time)
 
             self.money -= (margin - close_profit)
             self.close_profit += close_profit
@@ -851,6 +858,28 @@ class QIFI_Account():
                 self.positions[code] = pos
 
             return self.positions[code]
+
+    def get_holding_positions(self):
+        # 获得当前持仓的股票，已经清仓的不算
+        all_positions = list(self.positions.values())
+        poss = []
+        if all_positions:
+            for pos in all_positions:
+                if pos.volume_long != 0:
+                    poss.append(pos)
+
+        return poss
+
+    def get_history_positions(self):
+        # 获得曾经持仓但现在已经清仓的股票
+        all_positions = list(self.positions.values())
+        poss = []
+        if all_positions:
+            for pos in all_positions:
+                if pos.volume_long == 0:
+                    poss.append(pos)
+
+        return poss
 
     def query_trade(self):
         pass
