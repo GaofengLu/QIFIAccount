@@ -2,9 +2,11 @@ import datetime
 import uuid
 import traceback
 import pymongo
+import time
 from qaenv import mongo_ip
 import bson
 import pandas as pd
+import QUANTAXIS as QA
 from QIFIAccount.QAPosition import QA_Position
 from QUANTAXIS.QAARP.market_preset import MARKET_PRESET
 
@@ -302,9 +304,12 @@ class QIFI_Account():
         self.on_sync()
         try:
             if not self.nodatabase:
-                if self.model in ['BACKTEST', 'MANUAL']:
+                if self.model == 'MANUAL':
                     ## 数据库: quantaxis.history
                     self.db.history.update({'account_cookie': self.user_id, 'trading_day': self.trading_day}, {
+                        '$set': self.message}, upsert=True)
+                elif self.model == 'BACKTEST':
+                    self.db.history.update({'account_cookie': self.user_id, 'trading_day': self.trading_day, 'taskid': self.taskid}, {
                         '$set': self.message}, upsert=True)
                 else:
                     ## 数据库: QAREALTIME.account
@@ -342,7 +347,7 @@ class QIFI_Account():
             item.settle()
 
     def settle(self):
-        self.log('settle')
+        QA.QA_util_log_info('{} settle'.format(self.trading_day))
         self.sync()
         self.clear_for_newday()  # 回测的时候是不中断的，自动进入下一天，不存在每天间断操作
 
@@ -572,7 +577,6 @@ class QIFI_Account():
 
 # 惰性计算
 
-
     @property
     def available(self):
         return self.money
@@ -651,7 +655,6 @@ class QIFI_Account():
             only for stock
             """
             if (qapos.volume_long_his - qapos.volume_long_frozen_today) >= amount:
-
                 qapos.volume_long_frozen_today += amount
                 return True
             else:
@@ -694,9 +697,9 @@ class QIFI_Account():
 
     def send_order(self, code: str, amount: float, price: float, towards: int,
                    note: str = '', order_id: str = '', datetime: str = ''):
-
         if datetime:
-            self.on_price_change(code, price, datetime)
+            self.datetime = datetime
+
         order_id = str(uuid.uuid4()) if order_id == '' else order_id
         if self.order_check(code, amount, price, towards, order_id):
             self.log("order check success")
@@ -784,7 +787,6 @@ class QIFI_Account():
                      trade_id=None,
                      realorder_id=None):
         if order_id in self.orders.keys():
-
             # update order
             od = self.orders[order_id]
             frozen = self.frozen.get(
@@ -847,7 +849,6 @@ class QIFI_Account():
                 self.sync()
 
     def get_position(self, code: str = None) -> QA_Position:
-
         #exchange_id =  self.market_preset.get_exchange(code)
         if code is None:
             return list(self.positions.values())[0]
@@ -894,24 +895,17 @@ class QIFI_Account():
         if '.' in code:
             return code
         else:
-            return self.market_preset.get_exchange(code) + '.' + code
+            # 既然目前只做股票，那么默认为 stock_cn
+            return 'stock_cn.' + code
+            # return self.market_preset.get_exchange(code) + '.' + code
 
     def on_price_change(self, code, price, datetime=None):
-        code = self.format_code(code)
+        # 默认应该是调用在已经持仓的股票上
+        pos = self.positions['stock_cn.' + code]
+        pos.last_price = price
 
-        if code in self.positions.keys():
-            try:
-                pos = self.get_position(code.split('.')[1])
-                if pos.last_price == price:
-                    pass
-                else:
-                    pos.last_price = price
-
-                if self.model not in ['BACKTEST', 'MANUAL']:
-                    self.sync()
-            except Exception as e:
-
-                self.log(e)
+        if self.model not in ['BACKTEST', 'MANUAL']:
+            self.sync()
 
         if datetime:
             self.datetime = datetime
